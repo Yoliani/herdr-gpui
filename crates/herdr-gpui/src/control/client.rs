@@ -180,16 +180,37 @@ fn send(request: &Request) -> crate::Result<Response> {
 /// Hands a `herdr-gpui://` link to the running app; what it did, for a
 /// person. [`crate::Error::ControlUnavailable`] means no app is running.
 pub(crate) fn send_link(link: &crate::link::Link) -> crate::Result<String> {
+    hand_off(&Request::Link(Call {
+        caller: Caller::default(),
+        op: super::protocol::LinkOp { url: link.to_url() },
+    }))
+}
+
+/// Brings the running app's window forward, for a plain launch while it
+/// runs; what it did, for a person. [`crate::Error::ControlUnavailable`]
+/// means no app is running.
+#[cfg(windows)]
+pub(crate) fn send_focus() -> crate::Result<String> {
+    hand_off(&focus_request())
+}
+
+/// `app focus` for no workspace in particular: the frontmost window.
+#[cfg(any(windows, test))]
+fn focus_request() -> Request {
+    Request::App(Call {
+        caller: Caller::default(),
+        op: super::protocol::app::AppOp::Focus,
+    })
+}
+
+/// Sends what a launch hands to the running app instead of starting it.
+fn hand_off(request: &Request) -> crate::Result<String> {
     // The shell lets the process it started for a click take the
     // foreground; this passes that on to the app, so its window comes
     // forward instead of flashing in the taskbar.
     #[cfg(windows)]
     allow_foreground();
-    let request = Request::Link(Call {
-        caller: Caller::default(),
-        op: super::protocol::LinkOp { url: link.to_url() },
-    });
-    match send(&request)? {
+    match send(request)? {
         Response::Done { message } => Ok(message),
         response => Err(rejected(response)),
     }

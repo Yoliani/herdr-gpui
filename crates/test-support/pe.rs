@@ -1,5 +1,5 @@
 //! Reads the few PE fields the Windows executable tests check: the subsystem
-//! and the top of the resource tree. Shared into test crates by `#[path]`; no
+//! and the resource tree. Shared into test crates by `#[path]`; no
 //! dependencies and not a production module.
 
 use std::{
@@ -63,6 +63,41 @@ pub fn has_icon_group(path: &Path, id: u32) -> Result<bool> {
     Ok(entries(&image, root, root + names)?
         .iter()
         .any(|entry| entry.id == Some(id)))
+}
+
+/// Every resource of type `type_id`, in every language: its numeric name, or
+/// `None` for one named by a string, and its data.
+pub fn resources(path: &Path, type_id: u32) -> Result<Vec<(Option<u32>, Vec<u8>)>> {
+    let image = fs::read(path)?;
+    let headers = Headers::locate(&image)?;
+    let Some(root) = resource_root(&image)? else {
+        return Ok(Vec::new());
+    };
+    let Some(names) = entries(&image, root, root)?
+        .into_iter()
+        .find(|entry| entry.id == Some(type_id))
+    else {
+        return Ok(Vec::new());
+    };
+    let names = names
+        .subdirectory
+        .ok_or_else(|| invalid("a resource type entry is not a directory"))?;
+    let mut found = Vec::new();
+    for name in entries(&image, root, root + names)? {
+        let languages = name
+            .subdirectory
+            .ok_or_else(|| invalid("a resource name entry is not a directory"))?;
+        for language in entries(&image, root, root + languages)? {
+            if language.subdirectory.is_some() {
+                return Err(invalid("a resource language entry is a directory"));
+            }
+            let entry = root + language.data;
+            let start = file_offset(&image, &headers, read_u32(&image, entry)?)?;
+            let len = offset(read_u32(&image, entry + 4)?)?;
+            found.push((name.id, bytes(&image, start, len)?.to_vec()));
+        }
+    }
+    Ok(found)
 }
 
 struct Headers {
@@ -142,6 +177,8 @@ struct Entry {
     id: Option<u32>,
     /// Offset of the child directory from the resource root, for a branch.
     subdirectory: Option<usize>,
+    /// Offset of the data entry from the resource root, for a leaf.
+    data: usize,
 }
 
 fn entries(image: &[u8], root: usize, directory: usize) -> Result<Vec<Entry>> {
@@ -162,6 +199,7 @@ fn entries(image: &[u8], root: usize, directory: usize) -> Result<Vec<Entry>> {
             Ok(Entry {
                 id: (name & HIGH_BIT == 0).then_some(name),
                 subdirectory,
+                data: offset(data & !HIGH_BIT)?,
             })
         })
         .collect()

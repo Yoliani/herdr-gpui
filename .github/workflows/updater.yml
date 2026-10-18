@@ -1,35 +1,41 @@
 name: Updater Packaging
 
+# Only what scripts/test-updater.py compiles and the manifest tests read, in
+# both lists: its macOS jobs share runners with CI and Release.
 on:
   pull_request:
     paths:
-      - 'crates/**'
-      - 'scripts/**'
-      - 'assets/**'
-      - '.cargo/**'
-      - '**/Cargo.toml'
+      - 'crates/herdr-gpui/src/updater.rs'
+      - 'crates/herdr-gpui/src/updater/**'
+      - 'crates/herdr-gpui/src/constants.rs'
+      - 'crates/herdr-gpui/Cargo.toml'
+      - 'crates/herdr-client/src/process.rs'
+      - 'crates/herdr-client/Cargo.toml'
+      - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
-      - '.github/workflows/**'
-      - '!**/*.md'
-      - '!assets/social-preview-*'
-      - '!assets/icons/herdr-ui-icon-badge.*'
-      - '!.github/workflows/site.yml'
+      - '.cargo/**'
+      - 'scripts/test-updater.py'
+      - 'scripts/update-manifest.py'
+      - 'scripts/test_*manifest.py'
+      - '.github/workflows/updater.yml'
   push:
     branches: [main]
     paths:
-      - 'crates/**'
-      - 'scripts/**'
-      - 'assets/**'
-      - '.cargo/**'
-      - '**/Cargo.toml'
+      - 'crates/herdr-gpui/src/updater.rs'
+      - 'crates/herdr-gpui/src/updater/**'
+      - 'crates/herdr-gpui/src/constants.rs'
+      - 'crates/herdr-gpui/Cargo.toml'
+      - 'crates/herdr-client/src/process.rs'
+      - 'crates/herdr-client/Cargo.toml'
+      - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
-      - '.github/workflows/**'
-      - '!**/*.md'
-      - '!assets/social-preview-*'
-      - '!assets/icons/herdr-ui-icon-badge.*'
-      - '!.github/workflows/site.yml'
+      - '.cargo/**'
+      - 'scripts/test-updater.py'
+      - 'scripts/update-manifest.py'
+      - 'scripts/test_*manifest.py'
+      - '.github/workflows/updater.yml'
   workflow_dispatch:
 
 permissions: {}

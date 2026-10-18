@@ -91,7 +91,7 @@ pub fn start_sidebar(handle: WindowHandle<HerdrWindow>, cx: &mut App) {
         start_notifications(handle, cx);
         return;
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     if std::env::var_os("HERDR_TEST_PAGES_ONLY").is_some() {
         start_pages(handle, cx);
         return;

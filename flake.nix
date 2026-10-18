@@ -71,8 +71,8 @@
             "-p"
             "herdr-gpui"
           ];
-          # The optimized CLI suite the release workflow runs; the rest of the
-          # workspace suite needs a desktop or a live daemon.
+          # The optimized CLI suite CI's main-branch build runs; the rest of
+          # the workspace suite needs a desktop or a live daemon.
           cargoTestFlags = [
             "-p"
             "herdr-gpui"

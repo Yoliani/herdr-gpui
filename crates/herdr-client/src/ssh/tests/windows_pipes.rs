@@ -7,7 +7,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 const COMPATIBLE: &str = r#"{"endpoint_protocol_generation":1,"endpoint_capabilities":["surface_interest","presentation_effects_fence","health_check"],"remote_bridge_idle_timeout":true}"#;
 
 /// A bound for waits that only a broken test would reach; PowerShell can
-/// take a few seconds to start on a busy machine.
+/// take a few seconds to start on a busy machine, and has taken 20 on a
+/// hosted runner running the suite in parallel.
 const STARTUP: Duration = Duration::from_secs(30);
 
 /// `powershell.exe` running `script`, encoded so that no quoting applies.
@@ -53,7 +54,10 @@ $out.Write($hello + "`n")"#
     );
     let stop = AtomicBool::new(false);
     let Ok((mut stream, _child)) = start_bridge(powershell(&script), &stop, |stream, stop| {
-        // The banner's own deadline, not the test's, bounds this.
+        // Starting PowerShell is the test's wait, not the banner's: it can
+        // outlast the banner deadline. Once the first byte arrives, the
+        // banner's own deadline, not the test's, bounds the rest.
+        read_expected(stream, b"m");
         handshake(stream, stop)
     })
     .unwrap() else {
@@ -122,6 +126,9 @@ fn a_banner_without_a_ready_line_is_bounded() {
     ))
     .unwrap();
     stream.set_read_timeout(Some(POLL)).unwrap();
+    // Start the banner's clock once PowerShell runs, as in the handshake
+    // test; the 19,999 bytes left still exceed the limit.
+    read_expected(&mut stream, b"x");
     assert!(matches!(
         await_ready(&mut stream, &AtomicBool::new(false), Instant::now()),
         Err(Error::SshOutputLimit)

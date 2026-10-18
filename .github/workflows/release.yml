@@ -65,6 +65,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
+      actions: read
       contents: read
     outputs:
       sha: ${{ steps.validate.outputs.sha }}
@@ -97,6 +98,14 @@ jobs:
           [[ "$version" =~ ^[1-9][0-9]{7}\.[1-9][0-9]*$ ]]
           printf 'version=%s\nsha=%s\nchannel=%s\n' "$version" "$EXPECTED_SHA" "$CHANNEL" >> "$GITHUB_OUTPUT"
           printf 'Publishing %s v%s\n' "$CHANNEL" "$version"
+      # The release jobs build and package; formatting, lints and the test
+      # suites are CI's, on every platform, for this same commit. A release of
+      # a commit CI has not passed is refused rather than retested here.
+      - name: Require CI to have passed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: python3 scripts/release/check-ci.py "$EXPECTED_SHA"
       - name: Validate embedded updater public key
         env:
           HERDR_UPDATE_PUBLIC_KEY: ${{ vars.HERDR_UPDATE_PUBLIC_KEY }}
@@ -117,52 +126,21 @@ jobs:
             echo "::warning::WINDOWS_SIGNING_SUBJECT is not set: Windows ships unsigned, without winget or in-app updates"
           fi
 
-  macos-checks:
-    needs: validate
-    runs-on: macos-15
-    # Two full test passes took 35-39 minutes on healthy runners; a slow
-    # arm64 runner hit 45 mid-run on 2026-10-18.
-    timeout-minutes: 60
-    permissions:
-      contents: read
-    env:
-      MACOSX_DEPLOYMENT_TARGET: '14.2'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.validate.outputs.sha }}
-          persist-credentials: false
-      - name: Test release scripts and security contracts without credentials
-        env:
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: |
-          python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"'
-          jq --version
-          python3 -m unittest discover -s scripts/release/tests -v
-          python3 scripts/release/test-release-security.py
-          OPENSSL="$(brew --prefix openssl@3)/bin/openssl" python3 -m unittest discover -s scripts -p 'test_*manifest.py' -v
-      - run: rustup show
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --locked --workspace
-      - run: cargo test --locked --workspace --all-features
-
+  # Both macOS targets build on Apple Silicon: Intel runners are scarce and
+  # slow, and x86_64 cross-compiles there and runs under Rosetta. Formatting,
+  # lints and the test suites are CI's, which validate requires for this commit.
   macos-build:
     needs: validate
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15
-            arch: arm64
+          - arch: arm64
             target: aarch64-apple-darwin
-          - runner: macos-15-intel
-            arch: x86_64
+          - arch: x86_64
             target: x86_64-apple-darwin
-    runs-on: ${{ matrix.runner }}
-    # Intel runners have taken 34-40 minutes for the release build alone,
-    # leaving 60 minutes too tight for the tests, notices, and upload.
-    timeout-minutes: 90
+    runs-on: macos-15
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
@@ -176,15 +154,18 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
           persist-credentials: false
       - run: rustup show
+      - run: rustup target add "$TARGET"
+      - name: Require Rosetta for the x86_64 executable
+        if: matrix.arch == 'x86_64'
+        run: arch -x86_64 /usr/bin/true || sudo softwareupdate --install-rosetta --agree-to-license
       - run: cargo build --locked --release -p herdr-gpui --target "$TARGET"
-      - run: cargo test --locked --release -p herdr-gpui --test cli --target "$TARGET"
-      # cargo-about gates its binary behind the non-default `cli` feature, and
-      # `cargo install` only warns and exits 0 when it installs nothing. Verify
-      # the subcommand resolves here rather than failing in the next step.
+      - run: python3 scripts/release/smoke-cli.py "target/$TARGET/release/herdr-gpui"
       - name: Install the notice generator
-        run: |
-          cargo install cargo-about --version 0.9.2 --locked --features cli
-          cargo about --version
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-about@0.9.2
+          fallback: none
+      - run: cargo about --version
       - run: python3 scripts/release/generate-notices.py "target/$TARGET/release/THIRD-PARTY-NOTICES.txt"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4, Arbor/Moltis
         with:
@@ -226,19 +207,14 @@ jobs:
       - name: Require the declared native target
         run: |
           test "$(rustc -vV | sed -n 's/^host: //p')" = "$TARGET"
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --locked --workspace
-      - run: cargo test --locked --workspace --all-features
       - run: cargo build --locked --release -p herdr-gpui --target "$TARGET"
-      - run: cargo test --locked --release -p herdr-gpui --test cli --target "$TARGET"
-      # cargo-about gates its binary behind the non-default `cli` feature, and
-      # `cargo install` only warns and exits 0 when it installs nothing. Verify
-      # the subcommand resolves here rather than failing in the next step.
+      - run: python3 scripts/release/smoke-cli.py "target/$TARGET/release/herdr-gpui"
       - name: Install the notice generator
-        run: |
-          cargo install cargo-about --version 0.9.2 --locked --features cli
-          cargo about --version
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-about@0.9.2
+          fallback: none
+      - run: cargo about --version
       - run: python3 scripts/release/generate-notices.py "target/$TARGET/release/THIRD-PARTY-NOTICES.txt"
       - name: Package experimental Linux executable
         run: |
@@ -267,7 +243,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Experimental: the executable is built, lint- and CLI-tested here, and
+  # Experimental: the executable is built and its CLI smoke-tested here, and
   # windows-sign Authenticode-signs exactly these bytes. Nothing runs its
   # window or a live daemon, and it is deliberately absent from the update
   # manifest. No credentials reach this job or its build scripts.
@@ -305,17 +281,14 @@ jobs:
       - name: Require the declared native target
         run: |
           test "$(rustc -vV | sed -n 's/^host: //p')" = "$TARGET"
-      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --locked -p herdr-protocol -p herdr-client
       - run: cargo build --locked --release -p herdr-gpui -p herdr-gpui-launcher --target "$TARGET"
-      - run: cargo test --locked --release -p herdr-gpui --test cli --target "$TARGET"
-      # cargo-about gates its binary behind the non-default `cli` feature, and
-      # `cargo install` only warns and exits 0 when it installs nothing. Verify
-      # the subcommand resolves here rather than failing in the next step.
+      - run: python scripts/release/smoke-cli.py "target/$TARGET/release/herdr-gpui.exe"
       - name: Install the notice generator
-        run: |
-          cargo install cargo-about --version 0.9.2 --locked --features cli
-          cargo about --version
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-about@0.9.2
+          fallback: none
+      - run: cargo about --version
       # The Windows image provides `python`, not `python3`.
       - run: python scripts/release/generate-notices.py "target/$TARGET/release/THIRD-PARTY-NOTICES.txt"
       - name: Package experimental Windows executable
@@ -531,15 +504,15 @@ jobs:
           retention-days: 7
 
   sign:
-    needs: [validate, macos-checks, macos-build, linux, windows, windows-sign]
+    needs: [validate, macos-build, linux, windows, windows-sign]
     # windows-sign is skipped while Windows signing is not set up, and a
     # skipped need skips this job unless its condition checks results itself.
     if: >-
       !cancelled() &&
       github.repository == 'penso/herdr-gpui' && github.ref == 'refs/heads/main' &&
       github.actor == 'penso' && github.triggering_actor == 'penso' &&
-      needs.validate.result == 'success' && needs.macos-checks.result == 'success' &&
-      needs.macos-build.result == 'success' && needs.linux.result == 'success' &&
+      needs.validate.result == 'success' && needs.macos-build.result == 'success' &&
+      needs.linux.result == 'success' &&
       needs.windows.result == 'success' &&
       (needs.windows-sign.result == 'success' ||
        (needs.validate.outputs.windows_signed == 'false' && needs.windows-sign.result == 'skipped'))

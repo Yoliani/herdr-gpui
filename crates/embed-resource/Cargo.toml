@@ -1,0 +1,13 @@
+# Replaces crates.io's embed-resource, through [patch.crates-io] in the
+# workspace manifest, so GPUI's build script embeds no manifest; see src/lib.rs.
+[package]
+edition.workspace      = true
+license.workspace      = true
+name                   = "embed-resource"
+publish.workspace      = true
+rust-version.workspace = true
+# Within the `3.0` GPUI asks for, so the patch applies.
+version = "3.0.11"
+
+[lints]
+workspace = true

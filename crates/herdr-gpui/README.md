@@ -4165,6 +4165,14 @@ an `install.ps1` copy has no uninstaller, so turn the setting off before
 deleting its folder. macOS and Linux have no launch-at-login setting yet
 (`src/launch_at_login.rs`).
 
+The app runs once per user. A plain second launch, such as the Start menu
+entry or the launcher with no link, sends `app focus` over the control pipe,
+so the running app's window comes forward and the new process exits. The
+launcher and the new process pass on the shell's foreground right, so the
+window comes forward instead of flashing in the taskbar. A launch with
+`--socket` or `--session` still starts a separate app. So does a plain launch
+when the running app cannot answer, for example one that hangs.
+
 Starting a local `herdr server` looks for `herdr.exe` and uses
 `CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW` in place of `process_group(0)`, so
 the daemon survives the GUI and no console window appears.
@@ -4180,6 +4188,14 @@ The build script embeds the Herdr icon as icon resource 1, which GPUI loads for
 its windows, and version information that Explorer and Task Manager show as
 **Herdr UI** with the release version, or `dev` for a local build. See
 [the icon README](../../assets/icons/README.md#windows).
+
+Both executables also carry one application manifest,
+[`windows.manifest`](windows.manifest): per-monitor DPI awareness, long paths
+(once Windows allows them), the UTF-8 code page for ANSI APIs, Windows 10 and
+11 as supported systems, and no elevation. It replaces GPUI's own manifest,
+which GPUI's platform crate always asks for and an executable cannot hold
+beside a second one, so the workspace patches GPUI's `embed-resource` build
+dependency with the no-op in `crates/embed-resource`.
 
 Each release also has a per-user Inno Setup installer,
 `Herdr-VERSION-TARGET-setup.exe` (`scripts/release/herdr-gpui.iss`), which
@@ -4218,8 +4234,9 @@ Windows cross-check.
   is on; with it off, only the devices are listed. An entry you remove from the
   list is forgotten. The recent checkouts are kept in `jump-list.json` in the
   state directory.
-- **`herdr-gpui://` links.** The installer registers the scheme for the current
-  user (`HKCU\Software\Classes\herdr-gpui`) and removes it on uninstall.
+- **`herdr-gpui://` links.** The installer and `site/install.ps1` register the
+  scheme for the current user (`HKCU\Software\Classes\herdr-gpui`) and remove
+  it on uninstall.
   `herdr-gpui://open?path=C:\src\repo` shows a local Git checkout or worktree:
   the workspace already open there, or, after you agree in the window, a new
   one (the repository's scripts are not trusted). `herdr-gpui://device?id=ID`

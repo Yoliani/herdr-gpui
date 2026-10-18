@@ -342,7 +342,7 @@ Ctrl+Shift+Q); see
 [keyboard shortcuts](crates/herdr-gpui/README.md#keyboard-shortcuts). The
 taskbar button shows a badge while agents need you and progress for long
 operations, the jump list offers recent workspaces and devices, clicking a
-notification brings its pane forward, and the installer registers
+notification brings its pane forward, and both installers register
 `herdr-gpui://` links that open a checkout or a device in the running app; see
 [Windows shell](crates/herdr-gpui/README.md#windows-shell).
 

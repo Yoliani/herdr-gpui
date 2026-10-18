@@ -21,8 +21,9 @@
 //! it, which answers through a callback.
 #![allow(unsafe_code)]
 
+use super::page_fixture::{open_page, page_url, serve};
 use super::*;
-use crate::browser::{Location, Store, TabId, WebUrl};
+use crate::browser::TabId;
 use objc2::{
     ClassType, Message as _, class, msg_send,
     rc::Retained,
@@ -31,13 +32,7 @@ use objc2::{
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSTrackingAreaOptions, NSView};
 use objc2_foundation::{NSError, NSPoint, NSString};
 use objc2_web_kit::WKWebView;
-use std::io::{Read as _, Write as _};
 use wry::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-/// The page the check loads: one element over all of it, which the pointer
-/// hovers anywhere on the page.
-const PAGE: &str =
-    "<!doctype html><title>Pages check</title><div id=spot style='position:fixed;inset:0'></div>";
 
 /// Asks the page whether the pointer hovers its one element.
 const HOVERED: &str = "String(document.querySelector('#spot').matches(':hover'))";
@@ -66,7 +61,9 @@ pub(super) fn start_pages(handle: WindowHandle<HerdrWindow>, cx: &mut App) {
         let result = async {
             let port = serve()?;
             let id = handle
-                .update(cx, |view, window, cx| open_page(view, window, cx, port))
+                .update(cx, |view, window, cx| {
+                    open_page(view, window, cx, Some(page_url(port)?)).map(|(_, id)| id)
+                })
                 .map_err(|error| anyhow!("{error:#}"))??;
             // Let the page show, lay out, and paint a few frames.
             for _ in 0..10 {
@@ -98,55 +95,6 @@ pub(super) fn start_pages(handle: WindowHandle<HerdrWindow>, cx: &mut App) {
         }
     })
     .detach();
-}
-
-/// Serves `PAGE` on the loopback address for as long as the check runs, and
-/// returns its port.
-fn serve() -> Result<u16> {
-    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
-    let port = listener.local_addr()?.port();
-    std::thread::spawn(move || {
-        for mut stream in listener.incoming().flatten() {
-            // Every request gets the page, so the request itself is dropped.
-            let mut request = [0; 1024];
-            let _ = stream.read(&mut request);
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{PAGE}",
-                PAGE.len()
-            );
-        }
-    });
-    Ok(port)
-}
-
-/// Splits the fixture's one workspace and opens the page `serve` serves on
-/// `port` in the right group.
-fn open_page(
-    view: &mut HerdrWindow,
-    window: &mut Window,
-    cx: &mut Context<HerdrWindow>,
-    port: u16,
-) -> Result<TabId> {
-    window.resize(size(px(1200.), px(780.)));
-    let mut shown = sidebar::layout_tests::snapshot(1);
-    shown.focused_workspace_id = Some("w0".into());
-    shown.focused_tab_id = Some("t0".into());
-    view.live.snapshot = Some(Arc::new(shown));
-    view.command(Command::SplitEditor, window, cx);
-    let right = view
-        .group_slots()
-        .get(1)
-        .map(|slot| slot.id)
-        .context("the split made no second group")?;
-    let url = WebUrl::try_from(format!("http://127.0.0.1:{port}/").as_str())?;
-    let scope = crate::browser::scope(&view.endpoints[view.selected_endpoint]);
-    let id = Store::update(cx, |store| {
-        store.open(scope, "w0", Some(Location::Web { url }), None)
-    })
-    .context("no browser tab opened")?;
-    view.show_browser_tab_in(Some(right), id, window, cx);
-    Ok(id)
 }
 
 fn locate(view: &HerdrWindow, window: &Window, id: TabId) -> Result<Native> {

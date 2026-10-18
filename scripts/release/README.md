@@ -54,6 +54,15 @@ for reproducible builds and matching cross-architecture PR metadata.
 
 ## Packaging Commands
 
+Before dispatch, `just release` and the release workflow both run
+`scripts/release/check-ci.py` against the exact release SHA. A successful CI
+workflow alone is insufficient: every platform check, native Windows test job,
+and optimized build must have completed successfully in the same owner-triggered
+push or manual run on `main`. Skipped or missing jobs fail the gate.
+For documentation-only commits, start a full run with
+`gh workflow run ci.yml --repo penso/herdr-gpui --ref main`, then retry
+`just release`; it waits for a pending run and checks its jobs before dispatching.
+
 ```sh
 cargo install cargo-about --version 0.9.2 --locked --features cli
 python3 scripts/release/generate-notices.py OUTPUT_DIR/THIRD-PARTY-NOTICES.txt

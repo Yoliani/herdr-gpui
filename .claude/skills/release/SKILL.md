@@ -37,6 +37,15 @@ failure is not a surprise:
 | `origin` is `penso/herdr-gpui` | `git remote get-url origin` |
 | `gh` authenticated as `penso` | `gh api user --jq .login` |
 | Local HEAD == `origin/main` on GitHub | compare `git rev-parse HEAD` with `gh api repos/penso/herdr-gpui/git/ref/heads/main --jq .object.sha` |
+| Full CI passed on that commit (a release only) | `python3 scripts/release/check-ci.py "$(git rev-parse HEAD)"` |
+
+The release workflow runs no test suites of its own: its `validate` job
+requires a successful owner-triggered push or manual CI run on main with every
+platform check and optimized build completed successfully. A green run with
+skipped checks does not qualify. While a run is still going, `dispatch.sh` waits
+for it before checking its jobs. For a documentation-only commit whose push CI
+skipped the suites, run `gh workflow run ci.yml --repo penso/herdr-gpui --ref main`
+to test the full commit before retrying the release.
 
 The script never fetches or checks out for you: if HEAD does not match, stop and
 tell the owner rather than pulling on their behalf.
@@ -89,7 +98,7 @@ everything since the previous stable one. `release.yml` and `promote.yml` share 
 ## The run stops for approvals
 
 Jobs run roughly: `audit` (shown as "Release Workflow Security") and `validate`,
-then `macos-checks`, `macos-build` (arm64 + x86_64), `linux` (aarch64 + x86_64),
+then `macos-build` (arm64 + x86_64, both on Apple Silicon), `linux` (aarch64 + x86_64),
 `windows` (x86_64 and ARM64 MSVC), `metadata` and `changelog`, then `sign` and
 `windows-sign` (Authenticode, one per Windows target), `windows-smoke` (installs
 the signed installers), `attest`, `publish`, and finally `homebrew` and `winget`.

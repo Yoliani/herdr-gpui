@@ -12,6 +12,8 @@ mod annotate;
 // Linux builds show no pages, so there is nothing to annotate there.
 #[cfg(any(target_os = "macos", windows))]
 mod annotate_view;
+#[cfg(windows)]
+mod building;
 mod closed;
 mod code;
 mod code_group;

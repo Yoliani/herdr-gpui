@@ -99,7 +99,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-14, macos-15, ubuntu-24.04, ubuntu-24.04-arm]
+        # macOS 14, the oldest supported release, runs on main only: every
+        # macOS job shares one account-wide runner limit with the release.
+        runner: ${{ fromJSON(github.event_name == 'pull_request' && '["macos-15", "ubuntu-24.04", "ubuntu-24.04-arm"]' || '["macos-14", "macos-15", "ubuntu-24.04", "ubuntu-24.04-arm"]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -123,6 +125,20 @@ jobs:
           jq --version
           python3 -m unittest discover -s scripts/release/tests -v
           python3 scripts/release/test-release-security.py
+      # The signed update manifests' contract. Releases require this job, so
+      # a manifest regression stops a release, not only the Updater workflow.
+      - name: Test update manifest contracts
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
+          else
+            OPENSSL=/usr/bin/openssl
+          fi
+          export OPENSSL
+          "$OPENSSL" version | grep -q '^OpenSSL 3\.'
+          python3 -m unittest discover -s scripts -p 'test_*manifest.py' -v
       - name: Install pinned Rust toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -149,8 +165,8 @@ jobs:
         run: cargo test --locked --workspace --all-features
 
   # Match the other platforms' Rust checks without an extra optimized build.
-  # Native GUI tests run in windows-native; release builds and optimized CLI
-  # tests run in the release workflow.
+  # Native GUI tests run in windows-native; the Windows release builds run in
+  # the release workflow.
   windows:
     if: >-
       needs.commits.outputs.code == 'true' &&
@@ -297,6 +313,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build optimized Windows executables
         run: cargo build --locked --release -p herdr-gpui -p herdr-gpui-launcher --target "$TARGET"
+      - name: Smoke-test the optimized executable as the release does
+        run: python scripts/release/smoke-cli.py "target/$TARGET/release/herdr-gpui.exe"
       # The release job passes generated third-party notices; any nonempty
       # file exercises the same packaging.
       - name: Package the Windows zip
@@ -354,20 +372,22 @@ jobs:
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.actor == 'penso' && github.triggering_actor == 'penso'
-    name: Release (${{ matrix.runner }}, ${{ matrix.arch }})
+    name: Release (${{ matrix.target }})
     needs: [zizmor, commits]
     strategy:
       fail-fast: false
       matrix:
+        # x86_64 macOS cross-compiles on Apple Silicon and runs under Rosetta,
+        # as the release workflow builds it; Intel runners are scarce.
         include:
           - runner: macos-15
-            arch: arm64
-          - runner: macos-15-intel
-            arch: x86_64
+            target: aarch64-apple-darwin
+          - runner: macos-15
+            target: x86_64-apple-darwin
           - runner: ubuntu-24.04
-            arch: x86_64
+            target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm
-            arch: arm64
+            target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -380,12 +400,26 @@ jobs:
         if: runner.os == 'Linux'
         run: bash scripts/install-linux-deps.sh
       - name: Install pinned Rust toolchain
-        run: rustup show
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup show
+          rustup target add "$TARGET"
+      - name: Require Rosetta for the x86_64 macOS executable
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: arch -x86_64 /usr/bin/true || sudo softwareupdate --install-rosetta --agree-to-license
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          key: release-${{ matrix.arch }}
+          key: release-${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build optimized native executable
-        run: cargo build --locked --release -p herdr-gpui
+      - name: Build optimized executable
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --locked --release -p herdr-gpui --target "$TARGET"
+      # The full CLI suite in release mode, for this commit; the release
+      # workflow only smoke-tests the bytes it ships, since `cargo test`
+      # rebuilds the executable with dev-dependency features.
       - name: Exercise release executable without opening a window
-        run: cargo test --locked --release -p herdr-gpui --test cli
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo test --locked --release -p herdr-gpui --test cli --target "$TARGET"

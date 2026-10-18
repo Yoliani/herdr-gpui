@@ -40,10 +40,20 @@ pub use sidebar_fixture::start_sidebar;
 mod notifications;
 use notifications::start_notifications;
 
+#[cfg(any(target_os = "macos", windows))]
+#[path = "smoke_page_fixture.rs"]
+mod page_fixture;
+
 #[cfg(target_os = "macos")]
 #[path = "smoke_pages.rs"]
 mod pages;
 #[cfg(target_os = "macos")]
+use pages::start_pages;
+
+#[cfg(windows)]
+#[path = "smoke_pages_windows.rs"]
+mod pages;
+#[cfg(windows)]
 use pages::start_pages;
 
 #[cfg(target_os = "macos")]

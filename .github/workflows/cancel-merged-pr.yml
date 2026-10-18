@@ -1,0 +1,60 @@
+name: Cancel merged PR checks
+
+on:
+  # Use the base-branch workflow and token, including for fork PRs. This job
+  # never checks out or executes PR code.
+  pull_request_target: # zizmor: ignore[dangerous-triggers] -- API-only cleanup; no checkout or PR code execution.
+    types: [closed]
+
+permissions: {}
+
+jobs:
+  cancel:
+    if: >-
+      github.repository == 'penso/herdr-gpui' &&
+      github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel unfinished runs belonging to the merged PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: python3 {0}
+        run: |
+          import json
+          import os
+          import subprocess
+
+          def api(path, *args):
+              return subprocess.check_output(
+                  ["gh", "api", path, *args], text=True,
+              )
+
+          base = f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs"
+          number = int(os.environ["PR_NUMBER"])
+          runs = set()
+          # Collect all pages before cancelling: changing the result set during
+          # pagination could otherwise skip runs. Include runs awaiting runners.
+          for status in ("queued", "in_progress", "waiting", "pending", "requested"):
+              pages = json.loads(api(
+                  f"{base}?event=pull_request&status={status}&per_page=100",
+                  "--paginate", "--slurp",
+              ))
+              for page in pages:
+                  for run in page["workflow_runs"]:
+                      if (run["event"] == "pull_request" and run["status"] != "completed"
+                              and any(pr["number"] == number for pr in run["pull_requests"])):
+                          runs.add(run["id"])
+
+          for run_id in sorted(runs):
+              try:
+                  api(f"{base}/{run_id}/cancel", "--method", "POST")
+                  print(f"Cancellation requested for run {run_id}")
+              except subprocess.CalledProcessError:
+                  # A run can finish between listing and cancellation. Surface
+                  # permission/API failures unless it really has completed.
+                  if json.loads(api(f"{base}/{run_id}"))["status"] != "completed":
+                      raise

@@ -771,7 +771,7 @@ impl HerdrWindow {
             self.ensure_code_page(window, cx);
         } else {
             #[cfg(any(target_os = "macos", windows))]
-            match self.browser.pages.ensure(&tab, window) {
+            match self.browser.pages.ensure(&tab, window, cx) {
                 Ok(()) => {
                     self.browser.failed.remove(&id);
                 }

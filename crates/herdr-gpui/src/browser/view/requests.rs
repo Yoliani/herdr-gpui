@@ -231,8 +231,9 @@ impl HerdrWindow {
         self.browser.pages.contains(id)
     }
 
-    /// Loads `location` in tab `id`'s page, if this window has made it.
-    pub(crate) fn load_requested_page(&self, id: TabId, location: &crate::browser::Location) {
+    /// Loads `location` in tab `id`'s page, if this window has made it or
+    /// is building it.
+    pub(crate) fn load_requested_page(&mut self, id: TabId, location: &crate::browser::Location) {
         self.browser.pages.load(id, location);
     }
 

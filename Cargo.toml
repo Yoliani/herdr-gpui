@@ -1,5 +1,5 @@
 [workspace]
-members  = ["crates/herdr-client", "crates/herdr-gpui", "crates/herdr-gpui-launcher", "crates/herdr-protocol"]
+members  = ["crates/embed-resource", "crates/herdr-client", "crates/herdr-gpui", "crates/herdr-gpui-launcher", "crates/herdr-protocol"]
 resolver = "2"
 
 [workspace.package]
@@ -127,10 +127,15 @@ windows-sys          = { features = ["Win32_Foundation", "Win32_System_Pipes"], 
 winresource          = "0.1.34"
 zeroize              = "=1.9.0"
 
+# GPUI's build script embeds its own Windows manifest through embed-resource,
+# which would clash with Herdr's (crates/herdr-gpui/windows.manifest); this
+# no-op stands in for it. See crates/embed-resource.
+[patch.crates-io]
+embed-resource = { path = "crates/embed-resource" }
+
 # Replaces the published gpui-pre-linux 0.3.6 with a copy that shares one
 # session-bus connection across system notifications instead of leaking one
 # per notification (see #387). Drop this patch and the vendor/ directory once
 # a gpui-pre snapshot carries the fix; vendor/gpui-pre-linux/PATCH.md has the
 # details.
-[patch.crates-io]
 gpui-pre-linux = { path = "vendor/gpui-pre-linux" }

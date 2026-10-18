@@ -1,6 +1,7 @@
 //! Embeds the Windows executable's resources: the Herdr icon as icon resource
 //! 1, which GPUI's Windows platform loads for the window class and Explorer and
-//! the taskbar show, and the version information Windows shows for the file.
+//! the taskbar show, the version information Windows shows for the file, and
+//! the application manifest (`windows.manifest`).
 
 use std::{
     io::{Error, ErrorKind},
@@ -16,6 +17,11 @@ const WORKTREE_ICON: &str = "assets/icons/Herdr-worktree.ico";
 const APP_NAME: &str = "Herdr UI";
 /// The version shown for builds outside the release pipeline, as in the app.
 const DEV_VERSION: &str = "dev";
+/// The application manifest: per-monitor DPI, long paths, the UTF-8 code
+/// page, the supported Windows versions, and no elevation. It replaces GPUI's own manifest, which
+/// `crates/embed-resource` keeps GPUI's build script from embedding: an
+/// executable holds one manifest.
+const MANIFEST: &str = "crates/herdr-gpui/windows.manifest";
 
 /// Embeds the resources when the build targets Windows; does nothing otherwise.
 ///
@@ -28,8 +34,8 @@ pub fn embed(manifest: &Path, worktree: bool) -> std::io::Result<()> {
     }
     println!("cargo:rerun-if-env-changed=HERDR_RELEASE_VERSION");
     let workspace = manifest.join("../..");
-    for icon in [ICON, WORKTREE_ICON] {
-        println!("cargo:rerun-if-changed={}", workspace.join(icon).display());
+    for file in [ICON, WORKTREE_ICON, MANIFEST] {
+        println!("cargo:rerun-if-changed={}", workspace.join(file).display());
     }
     let icon = workspace.join(if worktree { WORKTREE_ICON } else { ICON });
     let icon = icon.to_str().ok_or_else(|| {
@@ -38,12 +44,21 @@ pub fn embed(manifest: &Path, worktree: bool) -> std::io::Result<()> {
             "the icon path is not valid Unicode",
         )
     })?;
+    // A file rather than `set_manifest`'s string, which the resource script
+    // would carry with its line breaks turned into spaces.
+    let manifest = workspace.join(MANIFEST);
+    let manifest = manifest.to_str().ok_or_else(|| {
+        Error::new(
+            ErrorKind::InvalidInput,
+            "the manifest path is not valid Unicode",
+        )
+    })?;
     let (version, numeric) = version()?;
     let mut resource = WindowsResource::new();
     // `set_icon` names the icon 1, the resource GPUI's `LoadImageW` asks for.
-    // No manifest is set: GPUI's build script already embeds one.
     resource
         .set_icon(icon)
+        .set_manifest_file(manifest)
         .set("FileDescription", APP_NAME)
         .set("ProductName", APP_NAME)
         .set("FileVersion", &version)

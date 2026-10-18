@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Keep the required PR gate running while skipping native jobs for non-code edits.
 # Documentation-only images are excluded by name so any new asset is treated
-# as a build input until proven otherwise; keep updater.yml's paths in sync.
+# as a build input until proven otherwise.
 # The website workflow only publishes site/, which no build or test reads; the
 # zizmor job still audits it on every run.
 #
