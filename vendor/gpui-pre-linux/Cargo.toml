@@ -140,6 +140,15 @@ version = "=0.3.6"
 default-features = false
 package = "gpui-pre"
 
+# The unit tests in system_notifications.rs and the crate's own cfg(test)
+# code use gpui's test helpers, which the published crate's dependency does
+# not enable; dev-only, so production builds are unaffected.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dev-dependencies.gpui]
+version = "=0.3.6"
+default-features = false
+features = ["test-support"]
+package = "gpui-pre"
+
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.gpui_util]
 version = "=0.3.6"
 package = "gpui-pre-util"
@@ -310,3 +319,7 @@ priority = -1
 [lints.rust.unexpected_cfgs]
 level = "allow"
 priority = 0
+
+# Keeps the vendored crate out of the repository workspace; the parent
+# resolves it through [patch.crates-io] with its own lockfile.
+[workspace]

@@ -11,8 +11,9 @@
 //! notification: a daemon that closes a notification without an observable
 //! signal (instant close, history-only or do-not-disturb delivery), or never
 //! closes it, used to pin that connection and its waiting thread for the
-//! lifetime of the process. With a shared connection the worst case is a
-//! stale entry in the bounded in-flight table, never a leaked connection.
+//! lifetime of the process. With a shared connection and a bounded signal
+//! buffer, the worst case is a few hundred bytes of bookkeeping, never a
+//! leaked connection.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -38,6 +39,11 @@ const NOTIFICATIONS_INTERFACE: &str = "org.freedesktop.Notifications";
 /// signals never arrive would otherwise pin its entry forever; the cap bounds
 /// it the same way the click registry bounds tags.
 const INFLIGHT_LIMIT: usize = 1024;
+/// Signals kept for ids whose `Notify` reply has not landed yet. The daemon
+/// can signal an id (assign it, then close or activate it) before the client
+/// sees the reply; buffering keeps such clicks alive without letting a reply
+/// that never arrives pin anything.
+const EARLY_LIMIT: usize = 64;
 
 type ResponseCallback = Rc<RefCell<Option<Box<dyn FnMut(SystemNotificationResponse)>>>>;
 
@@ -47,14 +53,26 @@ struct Inflight {
     action_ids: HashMap<String, SharedString>,
 }
 
+/// A signal that arrived before the `Notify` reply recorded its id.
+enum Early {
+    Action(String),
+    Closed,
+}
+
 #[derive(Default)]
 struct InflightTable {
     by_id: HashMap<u32, Inflight>,
     order: VecDeque<u32>,
+    early: HashMap<u32, Early>,
 }
 
 impl InflightTable {
     fn insert(&mut self, id: u32, entry: Inflight) {
+        if self.by_id.remove(&id).is_some() {
+            // A restarted daemon can reuse ids; drop the stale queue position
+            // so eviction stays oldest-first and `order` holds each id once.
+            self.order.retain(|queued| *queued != id);
+        }
         while self.by_id.len() >= INFLIGHT_LIMIT {
             let Some(oldest) = self.order.pop_front() else {
                 break;
@@ -71,9 +89,28 @@ impl InflightTable {
         Some(entry)
     }
 
+    /// Keeps a signal for an id the poster has not recorded yet. The first
+    /// arrival wins: an activation followed by a close must not lose the
+    /// click.
+    fn remember_early(&mut self, id: u32, signal: Early) {
+        if self.early.len() >= EARLY_LIMIT {
+            // Safety valve for ids whose reply never lands; the victim is
+            // arbitrary.
+            if let Some(&victim) = self.early.keys().next() {
+                self.early.remove(&victim);
+            }
+        }
+        self.early.entry(id).or_insert(signal);
+    }
+
+    fn take_early(&mut self, id: u32) -> Option<Early> {
+        self.early.remove(&id)
+    }
+
     fn clear(&mut self) {
         self.by_id.clear();
         self.order.clear();
+        self.early.clear();
     }
 }
 
@@ -103,7 +140,8 @@ pub(crate) struct SystemNotificationState {
     callback: ResponseCallback,
     _response_task: Option<Task<()>>,
     /// `Some` once the poster thread exists; posting then never touches the
-    /// bus on the calling thread.
+    /// bus on the calling thread. Cleared when the worker is gone so the
+    /// next post starts a new one.
     post_sender: Mutex<Option<PostSender>>,
 }
 
@@ -151,16 +189,26 @@ impl SystemNotificationState {
                         .spawn(move || {
                             run_poster(post_receiver, worker_post_sender, worker_response_sender)
                         });
-                    if let Err(error) = spawn_result {
-                        log::warn!("failed to spawn system notification thread: {error}");
+                    match spawn_result {
+                        Ok(_poster) => {
+                            let _ = guard.insert(post_sender.clone());
+                            post_sender
+                        }
+                        // A failed spawn drops the receiver, so a stored
+                        // sender would be dead forever; leaving it unset
+                        // makes the next post retry.
+                        Err(error) => {
+                            log::warn!("failed to spawn system notification thread: {error}");
+                            return;
+                        }
                     }
-                    let _ = guard.insert(post_sender.clone());
-                    post_sender
                 }
             }
         };
         if sender.unbounded_send(WorkerPost::Notify(post)).is_err() {
             log::warn!("system notification poster is gone");
+            // The worker is gone; let the next post start a new one.
+            self.poisonable_post_sender().take();
         }
     }
 
@@ -241,16 +289,32 @@ fn run_poster(
                 };
                 match block_on(send_notify(connection, &post)) {
                     Ok(id) => {
-                        inflight
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .insert(
-                                id,
-                                Inflight {
+                        let mut table = inflight.lock().unwrap_or_else(PoisonError::into_inner);
+                        // The daemon may have signalled this id before the
+                        // reply arrived; drain that signal now so an early
+                        // click is not lost and an early close tracks
+                        // nothing.
+                        match table.take_early(id) {
+                            Some(Early::Action(transport)) => {
+                                let entry = Inflight {
                                     tag: post.tag,
                                     action_ids: post.action_ids,
-                                },
-                            );
+                                };
+                                if let Some(response) = invoked_response(entry, &transport) {
+                                    let _ = response_sender.unbounded_send(response);
+                                }
+                            }
+                            Some(Early::Closed) => {}
+                            None => {
+                                table.insert(
+                                    id,
+                                    Inflight {
+                                        tag: post.tag,
+                                        action_ids: post.action_ids,
+                                    },
+                                );
+                            }
+                        }
                     }
                     Err(error) => {
                         log::warn!("failed to show system notification: {error}");
@@ -337,18 +401,15 @@ fn run_reader(
                 let Ok((id, transport)) = message.body().deserialize::<(u32, String)>() else {
                     continue;
                 };
-                let entry = inflight
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .remove(id);
-                let Some(entry) = entry else {
+                let mut table = inflight.lock().unwrap_or_else(PoisonError::into_inner);
+                let Some(entry) = table.remove(id) else {
+                    // The reply has not landed yet; keep the signal so the
+                    // click survives until the poster records the id.
+                    table.remember_early(id, Early::Action(transport));
                     continue;
                 };
-                if let Some(action_id) = response_action_id(&transport, &entry.action_ids) {
-                    let _ = response_sender.unbounded_send(SystemNotificationResponse {
-                        tag: entry.tag,
-                        action_id,
-                    });
+                if let Some(response) = invoked_response(entry, &transport) {
+                    let _ = response_sender.unbounded_send(response);
                 }
             }
             Some(member) if member == "NotificationClosed" => {
@@ -356,13 +417,13 @@ fn run_reader(
                     continue;
                 };
                 // A close without activation sends no response, exactly as
-                // the per-notification wait used to. A close that arrives
-                // before the poster recorded the id leaves a stale entry,
-                // which the in-flight cap evicts.
-                inflight
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .remove(id);
+                // the per-notification wait used to.
+                let mut table = inflight.lock().unwrap_or_else(PoisonError::into_inner);
+                if table.remove(id).is_none() {
+                    // The reply has not landed yet; remember the close so
+                    // the poster skips tracking this id entirely.
+                    table.remember_early(id, Early::Closed);
+                }
             }
             _ => {}
         }
@@ -372,6 +433,15 @@ fn run_reader(
 
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
     zbus::block_on(future)
+}
+
+/// The response for an invoked action, if the transport id maps to an action
+/// the caller offered.
+fn invoked_response(entry: Inflight, transport: &str) -> Option<SystemNotificationResponse> {
+    response_action_id(transport, &entry.action_ids).map(|action_id| SystemNotificationResponse {
+        tag: entry.tag,
+        action_id,
+    })
 }
 
 fn response_action_id(
@@ -422,7 +492,33 @@ mod tests {
         }
         assert!(table.by_id.contains_key(&(INFLIGHT_LIMIT as u32)));
         assert!(!table.by_id.contains_key(&0));
-        assert_eq!(table.remove(0), None);
+        assert!(table.remove(0).is_none());
         assert!(table.remove(INFLIGHT_LIMIT as u32).is_some());
+    }
+
+    #[test]
+    fn inflight_table_keeps_one_queue_slot_per_reused_id() {
+        let mut table = InflightTable::default();
+        for tag in ["old", "new"] {
+            table.insert(
+                5,
+                Inflight {
+                    tag: SharedString::from(tag),
+                    action_ids: HashMap::new(),
+                },
+            );
+        }
+        assert_eq!(table.by_id.len(), 1);
+        assert_eq!(table.order.iter().filter(|queued| **queued == 5).count(), 1);
+        assert_eq!(table.remove(5).map(|entry| entry.tag), Some("new".into()));
+    }
+
+    #[test]
+    fn early_signals_keep_the_first_arrival() {
+        let mut table = InflightTable::default();
+        table.remember_early(7, Early::Action("gpui-action-0".to_string()));
+        table.remember_early(7, Early::Closed);
+        assert!(matches!(table.take_early(7), Some(Early::Action(_))));
+        assert!(table.take_early(7).is_none());
     }
 }

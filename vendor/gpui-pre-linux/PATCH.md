@@ -30,6 +30,12 @@ session-bus connection that was never closed in realistic conditions
 Still affected upstream as of `gpui-pre-linux` 0.3.9, which keeps the
 per-notification connection-and-`wait_for_action` shape.
 
+The vendored `Cargo.toml` carries three deviations from the published
+manifest: an empty `[workspace]` table (so the crate stays out of this
+repository's workspace), the `zbus` dependency the rewritten module needs,
+and a dev-only `test-support` gpui dependency that makes the crate's test
+target compile.
+
 [#387]: https://github.com/penso/herdr-gpui/issues/387
 
 ## What changed
@@ -47,9 +53,10 @@ closes report nothing).
   thread; one reader thread (`notify-read`) consumes signals and dispatches
   them by notification id.
 - A bounded in-flight table (1024 entries, FIFO eviction) replaces the
-  unbounded per-notification waits. A close signal that arrives before the
-  `Notify` reply can leave a stale entry, which the cap evicts; a stale entry
-  is a few hundred bytes, not a socket.
+  unbounded per-notification waits, and signals that arrive before the
+  `Notify` reply are buffered (capped at 64) and applied when the reply
+  lands: an early click is still dispatched, an early close tracks nothing,
+  and ids whose reply never arrives are dropped by the same caps.
 - Responses reach the app through the same channel and callback contract as
   before.
 
@@ -71,10 +78,10 @@ the leak deterministically:
 - A real daemon (dunst) closing notifications normally: no residue.
 - The application built against the vendored crate and ran under Xvfb.
 
-Not exercised here: Wayland compositors and a full desktop session; the
-module's two unit tests require a Linux host
-(`cargo test --lib` inside this directory; the crate is not built on macOS or
-Windows, so CI never compiles or runs them).
+Not exercised here: Wayland compositors and a full desktop session. The
+module's four unit tests need a Linux host
+(`cargo test --lib system_notifications` inside this directory; the crate is
+not built on macOS or Windows, so CI never compiles or runs them).
 
 ## How to drop this vendor
 
