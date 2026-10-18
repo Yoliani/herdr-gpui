@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Fail when a tracked source file (Rust, Python, shell, Swift) exceeds MAX_LINES.
-# There is no allowlist: split an oversized file by responsibility instead.
+# There is no allowlist for this repository's own code: split an oversized
+# file by responsibility instead. Vendored third-party code under vendor/ is
+# exempt.
 
 set -euo pipefail
 
@@ -12,6 +14,8 @@ failures=0
 while IFS= read -r -d '' file; do
   # A path deleted in the working tree is still listed by git until staged.
   [[ -f "$file" ]] || continue
+  # Vendored third-party code is kept close to upstream, not split locally.
+  [[ $file == vendor/* ]] && continue
   lines=$(wc -l < "$file" | tr -d ' ')
   if ((lines > MAX_LINES)); then
     echo "FAIL: $file has $lines lines (limit $MAX_LINES)"
